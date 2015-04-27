@@ -6,7 +6,7 @@
     confluenceAPI = 'https://[yourServer]/[context]/rest/api/'
 
 // the key of the confluence space to write to
-    confluenceSpaceKey = 'arc42'
+    confluenceSpaceKey = 'asciidoc'
 
 // the pagePrefix will be a prefix for each page title
 // use this if you only have access to one confluence space but need to store several
