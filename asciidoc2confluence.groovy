@@ -30,6 +30,15 @@ import org.jsoup.Jsoup
 import groovyx.net.http.RESTClient
 import groovyx.net.http.HttpResponseException
 
+String.metaClass.replaceAllEntities = {
+    delegate
+               .replaceAll('…','...')
+               .replaceAll('„','&rdquo;')
+               .replaceAll('“','&ldquo;')
+               .replaceAll('”','&rdquo;')
+               .replaceAll('–','&ndash;')
+               .replaceAll('’','&rsquo;')
+}
 // configuration
 def config = new ConfigSlurper().parse(new File('Config.groovy').text)
 
@@ -62,21 +71,6 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     }
     if (page) {
         println "found existing page: " + page.id +" version "+page.version.number
-
-        /** does not work as expected
-        //try to convert the local page through confluence to storage format
-        //https://developer.atlassian.com/display/CONFDEV/Confluence+REST+API+Examples#ConfluenceRESTAPIExamples-ContentConversion
-        def localPage = pageBody.toString()
-        trythis {
-            def request = [
-                value         : pageBody.toString(),
-                representation: 'storage'
-            ]
-            localPage = api.post(contentType: 'application/json',
-                    path: 'contentbody/convert/storage', body: request, headers: headers).data.value
-        }
-        println ">>>>>>> "+(localPage==pageBody.toString())
-        **/
 
         localPage = pageBody.toString().trim()
         //definition lists are not displayed by confluence, so turn them into tables
@@ -180,14 +174,14 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                 def request = [
                         id     : page.id,
                         type   : 'page',
-                        title  : config.confluencePagePrefix + pageTitle,
+                        title  : config.confluencePagePrefix + pageTitle.replaceAllEntities(),
                         version: [number: (page.version.number as Integer) + 1],
                         space  : [
                                 key: config.confluenceSpaceKey
                         ],
                         body   : [
                                 storage: [
-                                        value         : localPage,
+                                        value         : localPage.replaceAllEntities(),
                                         representation: 'storage'
                                 ]
                         ]
@@ -208,13 +202,13 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
         trythis {
             def request = [
                     type : 'page',
-                    title: config.confluencePagePrefix + pageTitle,
+                    title: config.confluencePagePrefix + pageTitle.replaceAllEntities(),
                     space: [
                             key: config.confluenceSpaceKey
                     ],
                     body : [
                             storage: [
-                                    value         : pageBody.toString(),
+                                    value         : pageBody.toString().replaceAllEntities(),
                                     representation: 'storage'
                             ]
                     ]
@@ -225,19 +219,22 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                 ]
             }
             try {
+
             page = api.post(contentType: 'application/json',
                     path: 'content', body: request, headers: headers)
             } catch (Exception e) {
                 //TODO: handle exception in a better way
                 println "got an Exception :-("
                 println e
+                println request
+                throw new RuntimeException("it seems that a special utf-8 character wasn't replaced with the right html entity")
             }
         }
         println "created page "+page?.data?.id
         return page?.data?.id
     }
 }
-def html = new File(config.input).text
+def html = new File(config.input).getText('utf-8')
 def dom = Jsoup.parse(html)
 // <div class="sect1"> are the main headings
 // let's extract these and push them to confluence
@@ -267,3 +264,4 @@ dom.select('div.sect1').each { sect1 ->
         pushToConfluence subPage.title, subPage.body, thisSection
     }
 }
+""
