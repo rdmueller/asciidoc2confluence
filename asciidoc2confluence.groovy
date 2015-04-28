@@ -24,21 +24,14 @@
 // some dependencies
 @Grapes(
     [@Grab('org.jsoup:jsoup:1.7.3'),
-    @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.6' )]
+    @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.7' )]
 )
 import org.jsoup.Jsoup
 import groovyx.net.http.RESTClient
 import groovyx.net.http.HttpResponseException
+import groovyx.net.http.EncoderRegistry
+import groovyx.net.http.ContentType
 
-String.metaClass.replaceAllEntities = {
-    delegate
-               .replaceAll('…','...')
-               .replaceAll('„','&rdquo;')
-               .replaceAll('“','&ldquo;')
-               .replaceAll('”','&rdquo;')
-               .replaceAll('–','&ndash;')
-               .replaceAll('’','&rsquo;')
-}
 // configuration
 def config = new ConfigSlurper().parse(new File('Config.groovy').text)
 
@@ -58,14 +51,18 @@ void trythis (Closure action) {
 // the create-or-update functionality for confluence pages
 def pushToConfluence = { pageTitle, pageBody, parentId ->
     def api = new RESTClient(config.confluenceAPI)
-    def headers = ['Authorization': 'Basic ' + config.confluenceCredentials]
-
+    def headers = [
+                    'Authorization': 'Basic ' + config.confluenceCredentials,
+                    'Content-Type':'application/json; charset=utf-8'
+                  ]
+    //this fixes the encoding
+    api.encoderRegistry = new EncoderRegistry( charset: 'utf-8' )                   
     //try to get an existing page
     def page
     trythis {
         page = api.get(path: 'content', query: [
                 'spaceKey': config.confluenceSpaceKey,
-                'title'   : config.confluencePagePrefix + pageTitle.replaceAllEntities(),
+                'title'   : config.confluencePagePrefix + pageTitle,
                 'expand'  : 'body.storage,version'
         ], headers: headers).data.results[0]
     }
@@ -80,7 +77,6 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                              .replaceAll('</dt>','</th>')
                              .replaceAll('<dd>','<td>')
                              .replaceAll('</dd>','</td></tr>')
-                             .replaceAllEntities()
 
         //normalize both pages (local and found remote) a little bit so that they are better comparable
 
@@ -95,7 +91,6 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                                 //whitespaces
                                .replaceAll("\r",'')
                                .replaceAll("\t",'    ')
-                               .replaceAllEntities()
 
         //try to compare pages with jsoup
         normalizedPage = Jsoup.parse(localPage)
@@ -106,7 +101,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
             if (element.nodeName() in ['caption']) {
                 element.unwrap()
             }
-            if (element.nodeName() in (1..6).collect{"h"+it}) {
+            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
                 element.removeAttr('id')
             }
         }
@@ -121,6 +116,9 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
         remotePage.select("*").each { element ->
             if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
                 element.remove();
+            }
+            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
+                element.removeAttr('id')
             }
         }
         remotePage = remotePage.html()
@@ -150,14 +148,14 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                 def request = [
                         id     : page.id,
                         type   : 'page',
-                        title  : config.confluencePagePrefix + pageTitle.replaceAllEntities(),
+                        title  : config.confluencePagePrefix + pageTitle,
                         version: [number: (page.version.number as Integer) + 1],
                         space  : [
                                 key: config.confluenceSpaceKey
                         ],
                         body   : [
                                 storage: [
-                                        value         : localPage.replaceAllEntities(),
+                                        value         : localPage,
                                         representation: 'storage'
                                 ]
                         ]
@@ -167,7 +165,8 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                             [ type: 'page', id: parentId]
                     ]
                 }
-                def res = api.put(contentType: 'application/json',
+                def res = api.put(contentType: ContentType.JSON,
+                    requestContentType : ContentType.JSON,
                         path: 'content/' + page.id, body: request, headers: headers)
             }
             println "updated page"
@@ -178,13 +177,13 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
         trythis {
             def request = [
                     type : 'page',
-                    title: config.confluencePagePrefix + pageTitle.replaceAllEntities(),
+                    title: config.confluencePagePrefix + pageTitle,
                     space: [
                             key: config.confluenceSpaceKey
                     ],
                     body : [
                             storage: [
-                                    value         : pageBody.toString().replaceAllEntities(),
+                                    value         : pageBody.toString(),
                                     representation: 'storage'
                             ]
                     ]
@@ -194,23 +193,33 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                         [ type: 'page', id: parentId]
                 ]
             }
-
-            page = api.post(contentType: 'application/json',
+            //try {
+            page = api.post(contentType: ContentType.JSON,
+                    requestContentType : ContentType.JSON,
                     path: 'content', body: request, headers: headers)
+/*                    
+            } catch(Exception e) {
+                println e
+                println request
+                throw e
+            }
+            */
         }
         println "created page "+page?.data?.id
         return page?.data?.id
     }
 }
 def html = new File(config.input).getText('utf-8')
-def dom = Jsoup.parse(html)
+def dom = Jsoup.parse(html,'utf-8')
 // <div class="sect1"> are the main headings
 // let's extract these and push them to confluence
 def masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-new File('local').deleteDir()
-new File('remote').deleteDir()
-new File('local/.').mkdirs()
-new File('remote/.').mkdirs()
+
+//init folder structure for debugging
+['local','remote'].each { dir ->
+    new File(dir).deleteDir()
+    new File(dir+'/.').mkdirs()
+}
 
 dom.select('div.sect1').each { sect1 ->
     def pageTitle = sect1.select('h2').text()
