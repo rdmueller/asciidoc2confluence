@@ -65,7 +65,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     trythis {
         page = api.get(path: 'content', query: [
                 'spaceKey': config.confluenceSpaceKey,
-                'title'   : config.confluencePagePrefix + pageTitle,
+                'title'   : config.confluencePagePrefix + pageTitle.replaceAllEntities(),
                 'expand'  : 'body.storage,version'
         ], headers: headers).data.results[0]
     }
@@ -80,74 +80,61 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                              .replaceAll('</dt>','</th>')
                              .replaceAll('<dd>','<td>')
                              .replaceAll('</dd>','</td></tr>')
+                             .replaceAllEntities()
 
         //normalize both pages (local and found remote) a little bit so that they are better comparable
-        //TODO: should be done with jsoup and not with regexps
-        //remove some empty tags
-        def normalizedPage = localPage
-        //remove some empty tags
-        normalizedPage = normalizedPage.replaceAll('<(i|div|a)[^>]*>[ \t]*</\\1>','')
-        //remove attributes from headline tags
-                                       .replaceAll('<h([0-9])[^>]*>','<h$1>')
-        //remove decimal places to some style attributes
-                                       .replaceAll(':[ \t]*([0-9]+)[.]0%',':$1%')
-        //replace some characters with the corresponding html entities
-                                       .replaceAll('…','&hellip;')
-                                       .replaceAll('„','&bdquo;')
-                                       .replaceAll('“','&ldquo;')
-                                       .replaceAll('–','&ndash;')
-                                       .replaceAll('’','&rsquo;')
-        //remove caption tags
-                                       .replaceAll('<(/|)caption[^>]*>','')
-        //I don't think we need this anymore after fixing the above line
-                                       .replaceAll('; "',';"')
-                                       .replaceAll('(<tbody>|</tbody>)','')
-        //whitespaces
-                                       .replaceAll("\r",'')
-        //localPage = localPage.replaceAll("\n",'')
-                                       .replaceAll("\t",'    ')
-        //localPage = localPage.replaceAll('  ',' ')
-        //very ugly temporary solution:
-        //switch image attributes 'src="x"' and 'alt="x"'
-                                       .replaceAll('<img (src="[^"]*") (alt="[^"]*")','<img $2 $1')
-        //switch image attributes 'width="x"' and 'title="x"'
-                                       .replaceAll('<img([^>]+)(width="[^"]*") (title="[^"]*")','<img $1$3 $2')
-                                       .replaceAll('<a id="[^"]*"','<a')
 
         def remotePage = page.body.storage.value.toString().trim()
 
-        remotePage = remotePage.replaceAll('<(i|div|a)[^>]*>[ \t]*</\\1>','')
+        remotePage = remotePage
+                                //remove empty tags
+                               .replaceAll('<(i|div|a)[^>]*>[ \t]*</\\1>','')
+                                //remove decimal places to some style attributes
                                .replaceAll(':[ \t]*([0-9]+)[.]0%',':$1%')
                                .replaceAll('(<tbody>|</tbody>)','')
-        //whitespaces
+                                //whitespaces
                                .replaceAll("\r",'')
-        //localPage = localPage.replaceAll("\n",'')
                                .replaceAll("\t",'    ')
-        //localPage = localPage.replaceAll('  ',' ')
+                               .replaceAllEntities()
 
         //try to compare pages with jsoup
         normalizedPage = Jsoup.parse(localPage)
         normalizedPage.select("*").each { element ->
-            if (!element.hasText() && element.nodeName() in ['a','div']) {
+            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
                 element.remove()
             }
             if (element.nodeName() in ['caption']) {
                 element.unwrap()
             }
+            if (element.nodeName() in (1..6).collect{"h"+it}) {
+                element.removeAttr('id')
+            }
         }
         normalizedPage = normalizedPage.html()
+                            .replaceAll("(?sm)[ \t]+\n","\n")
+                            .replaceAll(">[ ]+<","> <")
+                            .replaceAll(';[ ]+"',';"')
+                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
+                            .replaceAll('center">','center;">')
+        
         remotePage = Jsoup.parse(remotePage)
         remotePage.select("*").each { element ->
-            if (!element.hasText() && element.nodeName() in ['a','div']) {
-                println ">>>>>>>>>>>>> "+element.nodeName()
+            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
                 element.remove();
             }
         }
         remotePage = remotePage.html()
+                            .replaceAll("(?sm)[ \t]+\n","\n")
+                            .replaceAll(">[ ]+<","> <")
+                            .replaceAll(';[ ]+"',';"')
+                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
+                            .replaceAll('center">','center;">')
 
         if (normalizedPage == remotePage) {
             println "page hasn't changed!"
         } else {
+            //write some debug output
+            //can be analyzed with a tool like beyond compare 
             new File("local/${pageTitle}.html").write(normalizedPage)
             println " local transformed ".center(80,'=')
             println normalizedPage
@@ -156,17 +143,6 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
             new File("remote/${pageTitle}.html").write(remotePage)
             println " remote ".center(80,'=')
             println remotePage
-            /**
-            println "="*80
-            def storage = remotePage.split("\n")
-            def local = localPage.split("\n")
-            storage.eachWithIndex{ line, i->
-                if (storage[i]!=local[i]) {
-                    println "storage: "+storage[i]
-                    println "local:   "+local[i]
-                }
-            }
-             **/
             println "="*80
             trythis {
                 // update page
@@ -218,17 +194,9 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                         [ type: 'page', id: parentId]
                 ]
             }
-            try {
 
             page = api.post(contentType: 'application/json',
                     path: 'content', body: request, headers: headers)
-            } catch (Exception e) {
-                //TODO: handle exception in a better way
-                println "got an Exception :-("
-                println e
-                println request
-                throw new RuntimeException("it seems that a special utf-8 character wasn't replaced with the right html entity")
-            }
         }
         println "created page "+page?.data?.id
         return page?.data?.id
@@ -239,10 +207,11 @@ def dom = Jsoup.parse(html)
 // <div class="sect1"> are the main headings
 // let's extract these and push them to confluence
 def masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-new File('local').delete()
-new File('remote').delete()
-new File('remote/.').mkdirs()
+new File('local').deleteDir()
+new File('remote').deleteDir()
 new File('local/.').mkdirs()
+new File('remote/.').mkdirs()
+
 dom.select('div.sect1').each { sect1 ->
     def pageTitle = sect1.select('h2').text()
     def pageBody = sect1.select('div.sectionbody')
