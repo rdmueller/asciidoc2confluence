@@ -1,5 +1,6 @@
 /**
  * Created by Ralf D. Müller on 03.09.2014.
+ * https://github.com/rdmueller/asciidoc2confluence
  *
  * this script expects an HTML document created with AsciiDoctor
  * in the following style (default AsciiDoctor output)
@@ -24,7 +25,7 @@
 // some dependencies
 @Grapes(
     [@Grab('org.jsoup:jsoup:1.7.3'),
-    @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.7' )]
+    @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.6' )]
 )
 import org.jsoup.Jsoup
 import groovyx.net.http.RESTClient
@@ -34,7 +35,6 @@ import groovyx.net.http.ContentType
 
 // configuration
 def config = new ConfigSlurper().parse(new File('Config.groovy').text)
-
 println config
 // helper functions
 
@@ -44,9 +44,38 @@ void trythis (Closure action) {
         action.run()
     } catch (HttpResponseException error) {
         println "something went wrong - got an https response code "+error.response.status+":"
+        println error.response.dump()
         println error.response.data
         throw error
     }
+}
+//takes an html page and tries to normalize it
+//by applying some tranformations
+String normalize (def htmlPage) {
+        page = Jsoup.parse(htmlPage)
+        page.select("*").each { element ->
+            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
+                element.remove()
+            }
+            if (element.nodeName() in ['caption']) {
+                element.unwrap()
+            }
+            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
+                element.removeAttr('id')
+            }
+        }
+        page = page.html()
+                            .replaceAll("(?sm)[ \t]+\n","\n")
+                            .replaceAll(">[ ]+<","> <")
+                            .replaceAll(';[ ]+"',';"')
+                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
+                            .replaceAll('center">','center;">')
+                            //remove decimal places for some style attributes
+                            .replaceAll(':[ \t]*([0-9]+)[.]0%',':$1%')
+                            .replaceAll('(<tbody>|</tbody>)','')
+                            //whitespaces
+                            .replaceAll("\r",'')
+                            .replaceAll("\t",'    ')
 }
 // the create-or-update functionality for confluence pages
 def pushToConfluence = { pageTitle, pageBody, parentId ->
@@ -59,74 +88,51 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     api.encoderRegistry = new EncoderRegistry( charset: 'utf-8' )                   
     //try to get an existing page
     def page
+    localPage = pageBody.toString().trim()
+    //modify local page in order to match the internal confluence storage representation a bit better
+    //definition lists are not displayed by confluence, so turn them into tables
+    localPage = localPage.replaceAll('<dl>','<table>')
+                         .replaceAll('</dl>','</table>')
+                         .replaceAll('<dt[^>]*>','<tr><th>')
+                         .replaceAll('</dt>','</th>')
+                         .replaceAll('<dd>','<td>')
+                         .replaceAll('</dd>','</td></tr>')
+    def request = [
+            type : 'page',
+            title: config.confluencePagePrefix + pageTitle,
+            space: [
+                    key: config.confluenceSpaceKey
+            ],
+            body : [
+                    storage: [
+                            value         : localPage,
+                            representation: 'storage'
+                    ]
+            ]
+    ]
+    if (parentId) {
+        request.ancestors = [
+                [ type: 'page', id: parentId]
+        ]
+    }
     trythis {
-        page = api.get(path: 'content', query: [
-                'spaceKey': config.confluenceSpaceKey,
-                'title'   : config.confluencePagePrefix + pageTitle,
-                'expand'  : 'body.storage,version'
-        ], headers: headers).data.results[0]
+        page = api.get(path: 'content', 
+                       query: [
+                            'spaceKey': config.confluenceSpaceKey,
+                            'title'   : config.confluencePagePrefix + pageTitle,
+                            'expand'  : 'body.storage,version'
+                       ], headers: headers).data.results[0]
     }
     if (page) {
         println "found existing page: " + page.id +" version "+page.version.number
-
-        localPage = pageBody.toString().trim()
-        //definition lists are not displayed by confluence, so turn them into tables
-        localPage = localPage.replaceAll('<dl>','<table>')
-                             .replaceAll('</dl>','</table>')
-                             .replaceAll('<dt[^>]*>','<tr><th>')
-                             .replaceAll('</dt>','</th>')
-                             .replaceAll('<dd>','<td>')
-                             .replaceAll('</dd>','</td></tr>')
 
         //normalize both pages (local and found remote) a little bit so that they are better comparable
 
         def remotePage = page.body.storage.value.toString().trim()
 
-        remotePage = remotePage
-                                //remove empty tags
-                               .replaceAll('<(i|div|a)[^>]*>[ \t]*</\\1>','')
-                                //remove decimal places to some style attributes
-                               .replaceAll(':[ \t]*([0-9]+)[.]0%',':$1%')
-                               .replaceAll('(<tbody>|</tbody>)','')
-                                //whitespaces
-                               .replaceAll("\r",'')
-                               .replaceAll("\t",'    ')
-
-        //try to compare pages with jsoup
-        normalizedPage = Jsoup.parse(localPage)
-        normalizedPage.select("*").each { element ->
-            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
-                element.remove()
-            }
-            if (element.nodeName() in ['caption']) {
-                element.unwrap()
-            }
-            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
-                element.removeAttr('id')
-            }
-        }
-        normalizedPage = normalizedPage.html()
-                            .replaceAll("(?sm)[ \t]+\n","\n")
-                            .replaceAll(">[ ]+<","> <")
-                            .replaceAll(';[ ]+"',';"')
-                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
-                            .replaceAll('center">','center;">')
-        
-        remotePage = Jsoup.parse(remotePage)
-        remotePage.select("*").each { element ->
-            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
-                element.remove();
-            }
-            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
-                element.removeAttr('id')
-            }
-        }
-        remotePage = remotePage.html()
-                            .replaceAll("(?sm)[ \t]+\n","\n")
-                            .replaceAll(">[ ]+<","> <")
-                            .replaceAll(';[ ]+"',';"')
-                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
-                            .replaceAll('center">','center;">')
+        //try to compare pages by normalizing them
+        normalizedPage = normalize(localPage)
+        remotePage = normalize(remotePage)
 
         if (normalizedPage == remotePage) {
             println "page hasn't changed!"
@@ -134,40 +140,15 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
             //write some debug output
             //can be analyzed with a tool like beyond compare 
             new File("local/${pageTitle}.html").write(normalizedPage)
-            println " local transformed ".center(80,'=')
-            println normalizedPage
-            println " local original ".center(80,'=')
-            println pageBody.toString()
             new File("remote/${pageTitle}.html").write(remotePage)
-            println " remote ".center(80,'=')
-            println remotePage
-            println "="*80
             trythis {
                 // update page
                 // https://developer.atlassian.com/display/CONFDEV/Confluence+REST+API+Examples#ConfluenceRESTAPIExamples-Updatingapage
-                def request = [
-                        id     : page.id,
-                        type   : 'page',
-                        title  : config.confluencePagePrefix + pageTitle,
-                        version: [number: (page.version.number as Integer) + 1],
-                        space  : [
-                                key: config.confluenceSpaceKey
-                        ],
-                        body   : [
-                                storage: [
-                                        value         : localPage,
-                                        representation: 'storage'
-                                ]
-                        ]
-                ]
-                if (parentId) {
-                    request.ancestors = [
-                            [ type: 'page', id: parentId]
-                    ]
-                }
+                request.id      = page.id
+                request.version = [number: (page.version.number as Integer) + 1]
                 def res = api.put(contentType: ContentType.JSON,
-                    requestContentType : ContentType.JSON,
-                        path: 'content/' + page.id, body: request, headers: headers)
+                                  requestContentType : ContentType.JSON,
+                                  path: 'content/' + page.id, body: request, headers: headers)
             }
             println "updated page"
             return page.id
@@ -175,35 +156,9 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     } else {
         //create a page
         trythis {
-            def request = [
-                    type : 'page',
-                    title: config.confluencePagePrefix + pageTitle,
-                    space: [
-                            key: config.confluenceSpaceKey
-                    ],
-                    body : [
-                            storage: [
-                                    value         : pageBody.toString(),
-                                    representation: 'storage'
-                            ]
-                    ]
-            ]
-            if (parentId) {
-                request.ancestors = [
-                        [ type: 'page', id: parentId]
-                ]
-            }
-            //try {
             page = api.post(contentType: ContentType.JSON,
-                    requestContentType : ContentType.JSON,
-                    path: 'content', body: request, headers: headers)
-/*                    
-            } catch(Exception e) {
-                println e
-                println request
-                throw e
-            }
-            */
+                            requestContentType : ContentType.JSON,
+                            path: 'content', body: request, headers: headers)
         }
         println "created page "+page?.data?.id
         return page?.data?.id
@@ -214,7 +169,6 @@ def dom = Jsoup.parse(html,'utf-8')
 // <div class="sect1"> are the main headings
 // let's extract these and push them to confluence
 def masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-
 //init folder structure for debugging
 ['local','remote'].each { dir ->
     new File(dir).deleteDir()
