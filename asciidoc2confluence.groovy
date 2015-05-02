@@ -32,12 +32,19 @@ import groovyx.net.http.RESTClient
 import groovyx.net.http.HttpResponseException
 import groovyx.net.http.EncoderRegistry
 import groovyx.net.http.ContentType
+import java.security.MessageDigest
 
 // configuration
 def config = new ConfigSlurper().parse(new File('Config.groovy').text)
 println config
 // helper functions
 
+def generateMD5(String s) {
+    MessageDigest digest = MessageDigest.getInstance("MD5")
+    digest.update(s.bytes)
+    new BigInteger(1, digest.digest()).toString(16).padLeft(32, '0')
+} 
+ 
 // for getting better error message from the REST-API
 void trythis (Closure action) {
     try {
@@ -48,34 +55,6 @@ void trythis (Closure action) {
         println error.response.data
         throw error
     }
-}
-//takes an html page and tries to normalize it
-//by applying some tranformations
-String normalize (def htmlPage) {
-        page = Jsoup.parse(htmlPage)
-        page.select("*").each { element ->
-            if (!element.hasText() && element.nodeName() in ['a','div', 'i']) {
-                element.remove()
-            }
-            if (element.nodeName() in ['caption']) {
-                element.unwrap()
-            }
-            if (element.nodeName() in (['a']+(1..6).collect{"h"+it})) {
-                element.removeAttr('id')
-            }
-        }
-        page = page.html()
-                            .replaceAll("(?sm)[ \t]+\n","\n")
-                            .replaceAll(">[ ]+<","> <")
-                            .replaceAll(';[ ]+"',';"')
-                            .replaceAll('(?sm)<table([^>]*)>[ \t\n]+','<table$1>')
-                            .replaceAll('center">','center;">')
-                            //remove decimal places for some style attributes
-                            .replaceAll(':[ \t]*([0-9]+)[.]0%',':$1%')
-                            .replaceAll('(<tbody>|</tbody>)','')
-                            //whitespaces
-                            .replaceAll("\r",'')
-                            .replaceAll("\t",'    ')
 }
 // the create-or-update functionality for confluence pages
 def pushToConfluence = { pageTitle, pageBody, parentId ->
@@ -97,6 +76,10 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                          .replaceAll('</dt>','</th>')
                          .replaceAll('<dd>','<td>')
                          .replaceAll('</dd>','</td></tr>')
+    def localHash = generateMD5(localPage)                     
+    localPage += '<p><ac:structured-macro ac:name="children"/></p>'
+    localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
+                         
     def request = [
             type : 'page',
             title: config.confluencePagePrefix + pageTitle,
@@ -126,21 +109,16 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     if (page) {
         println "found existing page: " + page.id +" version "+page.version.number
 
-        //normalize both pages (local and found remote) a little bit so that they are better comparable
+        //extract hash from remote page to see if it is different from local one
 
         def remotePage = page.body.storage.value.toString().trim()
 
-        //try to compare pages by normalizing them
-        normalizedPage = normalize(localPage)
-        remotePage = normalize(remotePage)
-
-        if (normalizedPage == remotePage) {
+        def remoteHash = remotePage =~ /(?ms)hash: #([^#]+)#/
+        remoteHash = remoteHash.size()==0?"":remoteHash[0][1]
+                
+        if (remoteHash == localHash) {
             println "page hasn't changed!"
         } else {
-            //write some debug output
-            //can be analyzed with a tool like beyond compare 
-            new File("local/${pageTitle}.html").write(normalizedPage)
-            new File("remote/${pageTitle}.html").write(remotePage)
             trythis {
                 // update page
                 // https://developer.atlassian.com/display/CONFDEV/Confluence+REST+API+Examples#ConfluenceRESTAPIExamples-Updatingapage
@@ -169,11 +147,6 @@ def dom = Jsoup.parse(html,'utf-8')
 // <div class="sect1"> are the main headings
 // let's extract these and push them to confluence
 def masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-//init folder structure for debugging
-['local','remote'].each { dir ->
-    new File(dir).deleteDir()
-    new File(dir+'/.').mkdirs()
-}
 
 dom.select('div.sect1').each { sect1 ->
     def pageTitle = sect1.select('h2').text()
