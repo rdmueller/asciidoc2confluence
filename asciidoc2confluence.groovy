@@ -39,10 +39,8 @@ def config = new ConfigSlurper().parse(new File('Config.groovy').text)
 println config
 // helper functions
 
-def generateMD5(String s) {
-    MessageDigest digest = MessageDigest.getInstance("MD5")
-    digest.update(s.bytes)
-    new BigInteger(1, digest.digest()).toString(16).padLeft(32, '0')
+def MD5(String s) {
+    MessageDigest.getInstance("MD5").digest( s.bytes).encodeHex().toString()
 } 
  
 // for getting better error message from the REST-API
@@ -76,7 +74,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                          .replaceAll('</dt>','</th>')
                          .replaceAll('<dd>','<td>')
                          .replaceAll('</dd>','</td></tr>')
-    def localHash = generateMD5(localPage)                     
+    def localHash = MD5(localPage)                     
     localPage += '<p><ac:structured-macro ac:name="children"/></p>'
     localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
                          
