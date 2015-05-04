@@ -35,14 +35,16 @@ import groovyx.net.http.ContentType
 import java.security.MessageDigest
 
 // configuration
-def config = new ConfigSlurper().parse(new File('Config.groovy').text)
-println config
+println "scriptBasePath: ${scriptBasePath}"
+def config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
+println "Config: ${config}"
+
 // helper functions
 
 def MD5(String s) {
     MessageDigest.getInstance("MD5").digest( s.bytes).encodeHex().toString()
 } 
- 
+
 // for getting better error message from the REST-API
 void trythis (Closure action) {
     try {
@@ -58,26 +60,35 @@ void trythis (Closure action) {
 def pushToConfluence = { pageTitle, pageBody, parentId ->
     def api = new RESTClient(config.confluenceAPI)
     def headers = [
-                    'Authorization': 'Basic ' + config.confluenceCredentials,
-                    'Content-Type':'application/json; charset=utf-8'
-                  ]
+            'Authorization': 'Basic ' + config.confluenceCredentials,
+            'Content-Type':'application/json; charset=utf-8'
+    ]
     //this fixes the encoding
-    api.encoderRegistry = new EncoderRegistry( charset: 'utf-8' )                   
+    api.encoderRegistry = new EncoderRegistry( charset: 'utf-8' )
     //try to get an existing page
     def page
     localPage = pageBody.toString().trim()
     //modify local page in order to match the internal confluence storage representation a bit better
     //definition lists are not displayed by confluence, so turn them into tables
     localPage = localPage.replaceAll('<dl>','<table>')
+<<<<<<< HEAD
                          .replaceAll('</dl>','</table>')
                          .replaceAll('<dt[^>]*>','<tr><th>')
                          .replaceAll('</dt>','</th>')
                          .replaceAll('<dd>','<td>')
                          .replaceAll('</dd>','</td></tr>')
     def localHash = MD5(localPage)                     
+=======
+            .replaceAll('</dl>','</table>')
+            .replaceAll('<dt[^>]*>','<tr><th>')
+            .replaceAll('</dt>','</th>')
+            .replaceAll('<dd>','<td>')
+            .replaceAll('</dd>','</td></tr>')
+    def localHash = generateMD5(localPage)
+>>>>>>> Suggestions for optimization
     localPage += '<p><ac:structured-macro ac:name="children"/></p>'
     localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
-                         
+
     def request = [
             type : 'page',
             title: config.confluencePagePrefix + pageTitle,
@@ -97,12 +108,12 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
         ]
     }
     trythis {
-        page = api.get(path: 'content', 
-                       query: [
-                            'spaceKey': config.confluenceSpaceKey,
-                            'title'   : config.confluencePagePrefix + pageTitle,
-                            'expand'  : 'body.storage,version'
-                       ], headers: headers).data.results[0]
+        page = api.get(path: 'content',
+                query: [
+                        'spaceKey': config.confluenceSpaceKey,
+                        'title'   : config.confluencePagePrefix + pageTitle,
+                        'expand'  : 'body.storage,version'
+                ], headers: headers).data.results[0]
     }
     if (page) {
         println "found existing page: " + page.id +" version "+page.version.number
@@ -113,7 +124,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
 
         def remoteHash = remotePage =~ /(?ms)hash: #([^#]+)#/
         remoteHash = remoteHash.size()==0?"":remoteHash[0][1]
-                
+
         if (remoteHash == localHash) {
             println "page hasn't changed!"
         } else {
@@ -123,8 +134,8 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
                 request.id      = page.id
                 request.version = [number: (page.version.number as Integer) + 1]
                 def res = api.put(contentType: ContentType.JSON,
-                                  requestContentType : ContentType.JSON,
-                                  path: 'content/' + page.id, body: request, headers: headers)
+                        requestContentType : ContentType.JSON,
+                        path: 'content/' + page.id, body: request, headers: headers)
             }
             println "updated page"
             return page.id
@@ -133,38 +144,51 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
         //create a page
         trythis {
             page = api.post(contentType: ContentType.JSON,
-                            requestContentType : ContentType.JSON,
-                            path: 'content', body: request, headers: headers)
+                    requestContentType : ContentType.JSON,
+                    path: 'content', body: request, headers: headers)
         }
         println "created page "+page?.data?.id
         return page?.data?.id
     }
 }
-def html = new File(config.input).getText('utf-8')
-def dom = Jsoup.parse(html,'utf-8')
-// <div class="sect1"> are the main headings
-// let's extract these and push them to confluence
-def masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
 
-dom.select('div.sect1').each { sect1 ->
-    def pageTitle = sect1.select('h2').text()
-    def pageBody = sect1.select('div.sectionbody')
-    def subPages = []
-    pageBody.select('div.sect2').each { sect2 ->
-        def title = sect2.select('h3').text()
-        sect2.select('h3').remove()
-        def body = sect2
-        subPages << [
-                title: title,
-                body: body
-                ]
+config.input.each { input ->
+
+    def html = new File(input.file).getText('utf-8')
+    def dom = Jsoup.parse(html,'utf-8')
+    def masterid = input.ancestorId
+
+    // if confluenceAncestorId is not set, create a new parent page
+    if (!input.ancestorId) {
+        masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
+        log.info("New master page created with id ${masterid}")
     }
-    pageBody.select('div.sect2').remove()
-    println pageTitle
-    def thisSection = pushToConfluence pageTitle, pageBody, masterid
-    subPages.each { subPage ->
-        println "   "+subPage.title
-        pushToConfluence subPage.title, subPage.body, thisSection
+
+    // <div class="sect1"> are the main headings
+    // let's extract these and push them to confluence
+    dom.select('div.sect1').each { sect1 ->
+        def pageTitle = sect1.select('h2').text()
+        def pageBody = sect1.select('div.sectionbody')
+        def subPages = []
+
+        if (config.confluenceCreateSubpages) {
+            pageBody.select('div.sect2').each { sect2 ->
+                def title = sect2.select('h3').text()
+                sect2.select('h3').remove()
+                def body = sect2
+                subPages << [
+                        title: title,
+                        body: body
+                ]
+            }
+            pageBody.select('div.sect2').remove()
+        }
+        println pageTitle
+        def thisSection = pushToConfluence pageTitle, pageBody, masterid
+        subPages.each { subPage ->
+            println "   "+subPage.title
+            pushToConfluence subPage.title, subPage.body, thisSection
+        }
     }
 }
 ""
