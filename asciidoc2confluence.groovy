@@ -152,7 +152,7 @@ config.input.each { input ->
     // if confluenceAncestorId is not set, create a new parent page
     if (!input.ancestorId) {
         masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-        log.info("New master page created with id ${masterid}")
+        println("New master page created with id ${masterid}")
     }
 
     // <div class="sect1"> are the main headings
