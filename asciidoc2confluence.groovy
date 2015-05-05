@@ -35,6 +35,7 @@ import groovyx.net.http.ContentType
 import java.security.MessageDigest
 
 // configuration
+scriptBasePath = new File('.').getCanonicalPath()
 println "scriptBasePath: ${scriptBasePath}"
 def config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
 println "Config: ${config}"
@@ -51,7 +52,6 @@ void trythis (Closure action) {
         action.run()
     } catch (HttpResponseException error) {
         println "something went wrong - got an https response code "+error.response.status+":"
-        println error.response.dump()
         println error.response.data
         throw error
     }
@@ -71,21 +71,12 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     //modify local page in order to match the internal confluence storage representation a bit better
     //definition lists are not displayed by confluence, so turn them into tables
     localPage = localPage.replaceAll('<dl>','<table>')
-<<<<<<< HEAD
                          .replaceAll('</dl>','</table>')
                          .replaceAll('<dt[^>]*>','<tr><th>')
                          .replaceAll('</dt>','</th>')
                          .replaceAll('<dd>','<td>')
                          .replaceAll('</dd>','</td></tr>')
     def localHash = MD5(localPage)                     
-=======
-            .replaceAll('</dl>','</table>')
-            .replaceAll('<dt[^>]*>','<tr><th>')
-            .replaceAll('</dt>','</th>')
-            .replaceAll('<dd>','<td>')
-            .replaceAll('</dd>','</td></tr>')
-    def localHash = generateMD5(localPage)
->>>>>>> Suggestions for optimization
     localPage += '<p><ac:structured-macro ac:name="children"/></p>'
     localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
 
