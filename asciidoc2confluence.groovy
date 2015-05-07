@@ -1,5 +1,5 @@
 /**
- * Created by Ralf D. Müller on 03.09.2014.
+ * Created by Ralf D. MÃ¼ller on 03.09.2014.
  * https://github.com/rdmueller/asciidoc2confluence
  *
  * this script expects an HTML document created with AsciiDoctor
@@ -35,7 +35,7 @@ import groovyx.net.http.ContentType
 import java.security.MessageDigest
 
 // configuration
-scriptBasePath = new File('.').getCanonicalPath()
+scriptBasePath = scriptBasePath?:new File('.').getCanonicalPath()
 println "scriptBasePath: ${scriptBasePath}"
 def config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
 println "Config: ${config}"
