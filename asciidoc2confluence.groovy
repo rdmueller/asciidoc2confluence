@@ -1,5 +1,5 @@
 /**
- * Created by Ralf D. MÃ¼ller on 03.09.2014.
+ * Created by Ralf D. Müller on 03.09.2014.
  * https://github.com/rdmueller/asciidoc2confluence
  *
  * this script expects an HTML document created with AsciiDoctor
@@ -28,6 +28,8 @@
      @Grab('org.codehaus.groovy.modules.http-builder:http-builder:0.6' )]
 )
 import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
+import org.jsoup.nodes.Entities.EscapeMode
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Document.OutputSettings
 import org.jsoup.nodes.Element
@@ -39,9 +41,14 @@ import groovyx.net.http.ContentType
 import java.security.MessageDigest
 
 // configuration
-scriptBasePath = scriptBasePath?:new File('.').getCanonicalPath()
-println "scriptBasePath: ${scriptBasePath}"
-def config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
+def config
+try {
+    println "scriptBasePath: ${scriptBasePath}"
+    config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
+} catch (Exception e) {
+    // if no scriptBasePath is bound to this script, this might work
+    config = new ConfigSlurper().parse(new File('Config.groovy').text)
+}
 println "Config: ${config}"
 
 // helper functions
@@ -75,7 +82,8 @@ def parseAdmonitionBlock(block, String type) {
 
 //modify local page in order to match the internal confluence storage representation a bit better
 //definition lists are not displayed by confluence, so turn them into tables
-def parseBody(Elements body) {
+//body can be of type Element or Elements
+def parseBody(def body) {
     body.select('div.paragraph').unwrap()
     body.select('div.ulist').unwrap()
     body.select('div.sect3').unwrap()
@@ -192,13 +200,15 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
 config.input.each { input ->
 
     def html = new File(input.file).getText('utf-8')
-    Document dom = Jsoup.parse(html, 'utf-8')
-    dom.outputSettings(new OutputSettings().prettyPrint(false));//makes html() preserve linebreaks and spacing
+    Document dom = Jsoup.parse(html, 'utf-8', Parser.xmlParser())
+    dom.outputSettings().prettyPrint(false);//makes html() preserve linebreaks and spacing
+    dom.outputSettings().escapeMode(org.jsoup.nodes.Entities.EscapeMode.xhtml); //This will ensure xhtml validity regarding entities
+    dom.outputSettings().charset("UTF-8"); //does no harm :-)
     def masterid = input.ancestorId
 
     // if confluenceAncestorId is not set, create a new parent page
     if (!input.ancestorId) {
-        masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
+        masterid = pushToConfluence "Main Page", Jsoup.parse("this shall be the main page under which all other pages are created").select('*'), null
         println("New master page created with id ${masterid}")
     }
 
