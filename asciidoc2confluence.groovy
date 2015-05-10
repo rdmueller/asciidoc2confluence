@@ -24,10 +24,14 @@
 
 // some dependencies
 @Grapes(
-    [@Grab('org.jsoup:jsoup:1.7.3'),
-    @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.6' )]
+    [@Grab('org.jsoup:jsoup:1.8.2'),
+     @Grab('org.codehaus.groovy.modules.http-builder:http-builder:0.6' )]
 )
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Document.OutputSettings
+import org.jsoup.nodes.Element
+import org.jsoup.select.Elements
 import groovyx.net.http.RESTClient
 import groovyx.net.http.HttpResponseException
 import groovyx.net.http.EncoderRegistry
@@ -43,8 +47,8 @@ println "Config: ${config}"
 // helper functions
 
 def MD5(String s) {
-    MessageDigest.getInstance("MD5").digest( s.bytes).encodeHex().toString()
-} 
+    MessageDigest.getInstance("MD5").digest(s.bytes).encodeHex().toString()
+}
 
 // for getting better error message from the REST-API
 void trythis (Closure action) {
@@ -52,10 +56,59 @@ void trythis (Closure action) {
         action.run()
     } catch (HttpResponseException error) {
         println "something went wrong - got an https response code "+error.response.status+":"
+        println error.response.dump()
         println error.response.data
         throw error
     }
 }
+
+def parseAdmonitionBlock(block, String type) {
+    content = block.select(".content").first()
+    titleElement = content.select(".title")
+    titleText = ''
+    if(titleElement != null) {
+        titleText = "<ac:parameter ac:name=\"title\">${titleElement.text()}</ac:parameter>"
+        titleElement.remove()
+    }
+    block.after("<ac:structured-macro ac:name=\"${type}\">${titleText}<ac:rich-text-body>${content}</ac:rich-text-body></ac:structured-macro>")
+    block.remove()
+}
+
+//modify local page in order to match the internal confluence storage representation a bit better
+//definition lists are not displayed by confluence, so turn them into tables
+def parseBody(Elements body) {
+    body.select('div.paragraph').unwrap()
+    body.select('div.ulist').unwrap()
+    body.select('div.sect3').unwrap()
+    body.select('.admonitionblock.note').each { block ->
+        parseAdmonitionBlock(block, "info")
+    }
+    body.select('.admonitionblock.warning').each { block ->
+        parseAdmonitionBlock(block, "warning")
+    }
+    body.select('.admonitionblock.important').each { block ->
+        parseAdmonitionBlock(block, "warning")
+    }
+    body.select('.admonitionblock.caution').each { block ->
+        parseAdmonitionBlock(block, "note")
+    }
+    body.select('.admonitionblock.tip').each { block ->
+        parseAdmonitionBlock(block, "tip")
+    }
+    body.select('div.title').wrap("<strong></strong>").unwrap()
+    body.select('div.listingblock').wrap("<p></p>").unwrap()
+
+    pageString = body.toString().trim()
+            .replaceAll("<pre class=\".+\"><code( class=\".+\" data-lang=\".+\")?>", "<ac:structured-macro ac:name=\\\"code\\\"><ac:plain-text-body><![CDATA[")
+            .replaceAll("</code></pre>", "]]></ac:plain-text-body></ac:structured-macro>")
+            .replaceAll('<dl>','<table>')
+            .replaceAll('</dl>','</table>')
+            .replaceAll('<dt[^>]*>','<tr><th>')
+            .replaceAll('</dt>','</th>')
+            .replaceAll('<dd>','<td>')
+            .replaceAll('</dd>','</td></tr>')
+}
+
 // the create-or-update functionality for confluence pages
 def pushToConfluence = { pageTitle, pageBody, parentId ->
     def api = new RESTClient(config.confluenceAPI)
@@ -67,16 +120,9 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     api.encoderRegistry = new EncoderRegistry( charset: 'utf-8' )
     //try to get an existing page
     def page
-    localPage = pageBody.toString().trim()
-    //modify local page in order to match the internal confluence storage representation a bit better
-    //definition lists are not displayed by confluence, so turn them into tables
-    localPage = localPage.replaceAll('<dl>','<table>')
-                         .replaceAll('</dl>','</table>')
-                         .replaceAll('<dt[^>]*>','<tr><th>')
-                         .replaceAll('</dt>','</th>')
-                         .replaceAll('<dd>','<td>')
-                         .replaceAll('</dd>','</td></tr>')
-    def localHash = MD5(localPage)                     
+    localPage = parseBody(pageBody)
+
+    def localHash = MD5(localPage)
     localPage += '<p><ac:structured-macro ac:name="children"/></p>'
     localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
 
@@ -146,20 +192,21 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
 config.input.each { input ->
 
     def html = new File(input.file).getText('utf-8')
-    def dom = Jsoup.parse(html,'utf-8')
+    Document dom = Jsoup.parse(html, 'utf-8')
+    dom.outputSettings(new OutputSettings().prettyPrint(false));//makes html() preserve linebreaks and spacing
     def masterid = input.ancestorId
 
     // if confluenceAncestorId is not set, create a new parent page
     if (!input.ancestorId) {
         masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-        println("New master page created with id ${masterid}")
+        log.info("New master page created with id ${masterid}")
     }
 
     // <div class="sect1"> are the main headings
     // let's extract these and push them to confluence
     dom.select('div.sect1').each { sect1 ->
         def pageTitle = sect1.select('h2').text()
-        def pageBody = sect1.select('div.sectionbody')
+        Elements pageBody = sect1.select('div.sectionbody')
         def subPages = []
 
         if (config.confluenceCreateSubpages) {
@@ -173,6 +220,8 @@ config.input.each { input ->
                 ]
             }
             pageBody.select('div.sect2').remove()
+        } else {
+            pageBody.select('div.sect2').unwrap()
         }
         println pageTitle
         def thisSection = pushToConfluence pageTitle, pageBody, masterid
