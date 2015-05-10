@@ -56,7 +56,6 @@ void trythis (Closure action) {
         action.run()
     } catch (HttpResponseException error) {
         println "something went wrong - got an https response code "+error.response.status+":"
-        println error.response.dump()
         println error.response.data
         throw error
     }
@@ -123,6 +122,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
     localPage = parseBody(pageBody)
 
     def localHash = MD5(localPage)
+    localPage = '<p><ac:structured-macro ac:name="toc"/></p>'+localPage             
     localPage += '<p><ac:structured-macro ac:name="children"/></p>'
     localPage += '<p style="display:none">hash: #'+localHash+'#</p>'
 
@@ -199,7 +199,7 @@ config.input.each { input ->
     // if confluenceAncestorId is not set, create a new parent page
     if (!input.ancestorId) {
         masterid = pushToConfluence "Main Page", "this shall be the main page under which all other pages are created", null
-        log.info("New master page created with id ${masterid}")
+        println("New master page created with id ${masterid}")
     }
 
     // <div class="sect1"> are the main headings
