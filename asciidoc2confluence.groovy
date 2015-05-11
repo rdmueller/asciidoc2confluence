@@ -96,6 +96,13 @@ def parseBody(def body) {
             parseAdmonitionBlock(block, cType)
         }
     }
+    //special for the arc42-template
+    body.select('div.arc42help').each { div ->
+        def divBody = div.select('.content').html()
+        div.after('<ac:structured-macro ac:name="expand"><ac:rich-text-body><ac:structured-macro ac:name="info"><ac:parameter ac:name="title">arc42</ac:parameter><ac:rich-text-body><p>'+divBody+'</p></ac:rich-text-body></ac:structured-macro></ac:rich-text-body></ac:structured-macro>')
+        div.remove()
+        
+    }    
     body.select('div.title').wrap("<strong></strong>").unwrap()
     body.select('div.listingblock').wrap("<p></p>").unwrap()
 
