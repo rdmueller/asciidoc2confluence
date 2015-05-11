@@ -45,8 +45,8 @@ def config
 try {
     println "scriptBasePath: ${scriptBasePath}"
     config = new ConfigSlurper().parse(new File(scriptBasePath, 'Config.groovy').text)
-} catch (Exception e) {
-    // if no scriptBasePath is bound to this script, this might work
+} catch(groovy.lang.MissingPropertyException e) {
+    //no scriptBasePath, works for some szenarios
     config = new ConfigSlurper().parse(new File('Config.groovy').text)
 }
 println "Config: ${config}"
@@ -87,20 +87,14 @@ def parseBody(def body) {
     body.select('div.paragraph').unwrap()
     body.select('div.ulist').unwrap()
     body.select('div.sect3').unwrap()
-    body.select('.admonitionblock.note').each { block ->
-        parseAdmonitionBlock(block, "info")
-    }
-    body.select('.admonitionblock.warning').each { block ->
-        parseAdmonitionBlock(block, "warning")
-    }
-    body.select('.admonitionblock.important').each { block ->
-        parseAdmonitionBlock(block, "warning")
-    }
-    body.select('.admonitionblock.caution').each { block ->
-        parseAdmonitionBlock(block, "note")
-    }
-    body.select('.admonitionblock.tip').each { block ->
-        parseAdmonitionBlock(block, "tip")
+    [   'note':'info',
+        'warning':'warning',
+        'important':'warning',
+        'caution':'note',
+        'tip':'tip'            ].each { adType, cType ->
+        body.select('.admonitionblock.'+adType).each { block ->
+            parseAdmonitionBlock(block, cType)
+        }
     }
     body.select('div.title').wrap("<strong></strong>").unwrap()
     body.select('div.listingblock').wrap("<p></p>").unwrap()
@@ -172,6 +166,7 @@ def pushToConfluence = { pageTitle, pageBody, parentId ->
 
         if (remoteHash == localHash) {
             println "page hasn't changed!"
+            return page.id
         } else {
             trythis {
                 // update page
