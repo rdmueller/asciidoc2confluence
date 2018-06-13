@@ -117,7 +117,7 @@ buildscript {
         classpath 'org.jsoup:jsoup:1.9.1'
     }
     repositories {
-        maven { url 'http://nexus.fiducia.de/nexus/content/repositories/jcenter/' }
+        jcenter()
     }
 }
 
