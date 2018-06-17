@@ -105,4 +105,39 @@ The following `pom.xml` sample shows how to use the `asciidoc2confluence.groovy`
 
 === Usage with Gradle
 
-_to be done..._
+The following build.gradle sample shows how to use the asciidoc2confluence.groovy script with your Gradle build. It will run when you execute the gradle task gradlew publishToConfluence.
+
+----
+buildscript {
+    dependencies {
+        //for the exportJiraIssues Task
+        classpath 'org.codehaus.groovy.modules.http-builder:http-builder:0.6'
+        //for the renderToConfluence Task
+        classpath 'org.apache.httpcomponents:httpmime:4.3.1'
+        classpath 'org.jsoup:jsoup:1.9.1'
+    }
+    repositories {
+        jcenter()
+    }
+}
+
+task publishToConfluence(
+    description: 'publishes the HTML rendered output to confluence',
+    group: 'docToolchain'
+) {
+    // Directory containing the documents to be processed by docToolchain.
+    // If the documents are together with docToolchain, this can be relative path.
+    // If the documents are outside of docToolchain, this must be absolute path, usually provided
+    // on the command line with -P option given to gradle.
+    def docDir = file('.').path
+    
+    def confluenceConfigFile = "scripts/ConfluenceConfig.groovy"
+    def confluenceScript = project.file('scripts/asciidoc2confluence.groovy')
+    
+    doLast {
+        binding.setProperty('docDir', docDir)
+        binding.setProperty('confluenceConfigFile', confluenceConfigFile)
+        evaluate(confluenceScript)
+    }
+}
+----
