@@ -1,3 +1,10 @@
+[NOTE]
+====
+The code has been transfered to https://github.com/docToolchain/docToolchain/blob/master/scripts/asciidoc2confluence.groovy
+
+it is now part of docToolchain
+====
+
 = asciidoc2confluence
 :toc:
 :includedir: ./
